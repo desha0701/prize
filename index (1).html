@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ikki qo'l bilan shakl</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+<style>
+  body{margin:0;background:#111;color:#fff;font-family:system-ui,sans-serif;text-align:center}
+  h2{margin:12px 0 4px}
+  p{margin:4px 12px 10px;color:#aaa;font-size:14px}
+  canvas{max-width:100%;border-radius:12px;background:#000}
+  video{position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+  button{font-size:18px;padding:12px 24px;border:0;border-radius:10px;background:#4ade80;color:#000;margin:8px}
+  #st{color:#fde047;font-size:14px;margin:6px}
+</style>
+</head>
+<body>
+<h2>Ikki qo'l bilan shakl</h2>
+<p id="info">Ekranning chap tomonidagi qo'l – shakl tanlaydi va ushlab turadi (1 doira, 2 kvadrat, 3 uchburchak, 4 yulduz, musht – joyida qoldirish). O'ng tomondagi qo'l – bosh va ko'rsatkich barmoqni yaqinlashtirib/uzoqlashtirib o'lchamni o'zgartiradi.</p>
+<button id="go">Kamerani yoqish</button>
+<div id="st"></div>
+<video id="v" playsinline muted autoplay></video>
+<canvas id="c" width="800" height="600"></canvas>
+<script>
+const v = document.getElementById('v'), c = document.getElementById('c'), ctx = c.getContext('2d');
+const info = document.getElementById('info');
+const W = c.width, H = c.height;
+let state = {n: 1, x: W / 2, y: H / 2, r: 90};
+
+const hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}`});
+hands.setOptions({maxNumHands: 2, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6});
+hands.onResults(onResults);
+
+const sx = p => (1 - p.x) * W, sy = p => p.y * H;
+const dist = (a, b) => Math.hypot((a.x - b.x) * W, (a.y - b.y) * H);
+
+function fingers(lm) {
+  let n = 0;
+  [[8, 6], [12, 10], [16, 14], [20, 18]].forEach(([t, p]) => { if (lm[t].y < lm[p].y) n++; });
+  return n;
+}
+
+function shape(n, x, y, r) {
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  if (n === 1) { ctx.strokeStyle = '#4ade80'; ctx.arc(x, y, r, 0, Math.PI * 2); }
+  else if (n === 2) { ctx.strokeStyle = '#60a5fa'; ctx.rect(x - r, y - r, 2 * r, 2 * r); }
+  else if (n === 3) {
+    ctx.strokeStyle = '#f87171';
+    ctx.moveTo(x, y - r); ctx.lineTo(x - r, y + r * 0.8); ctx.lineTo(x + r, y + r * 0.8); ctx.closePath();
+  } else if (n === 4) {
+    ctx.strokeStyle = '#facc15';
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r;
+      ctx[i ? 'lineTo' : 'moveTo'](x + rr * Math.cos(a), y + rr * Math.sin(a));
+    }
+    ctx.closePath();
+  }
+  ctx.stroke();
+}
+
+function onResults(res) {
+  if (st.textContent.startsWith('Model yuklanmoqda')) st.textContent = '';
+  ctx.save();
+  ctx.scale(-1, 1);
+  ctx.drawImage(res.image, -W, 0, W, H);
+  ctx.restore();
+
+  const list = (res.multiHandLandmarks || []).slice();
+  list.forEach(lm => {
+    ctx.fillStyle = 'rgba(255,255,255,.8)';
+    lm.forEach(p => { ctx.beginPath(); ctx.arc(sx(p), sy(p), 3, 0, 7); ctx.fill(); });
+  });
+  // ekranda chapdagi qo'l = shakl qo'li
+  list.sort((a, b) => sx(a[0]) - sx(b[0]));
+
+  if (list.length >= 1) {
+    const A = list[0], n = fingers(A);
+    if (n >= 1) { state.n = n; state.x = sx(A[9]); state.y = sy(A[9]); }
+  }
+  if (list.length >= 2) {
+    const B = list[1];
+    const hs = dist(B[0], B[9]);                 // qo'l o'lchami
+    const ratio = dist(B[4], B[8]) / hs;         // chimchilash masofasi
+    const target = Math.max(30, Math.min(220, ratio * 110));
+    state.r += (target - state.r) * 0.3;         // silliqlash
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sx(B[4]), sy(B[4])); ctx.lineTo(sx(B[8]), sy(B[8])); ctx.stroke();
+  }
+
+  shape(state.n, state.x, state.y, state.r);
+  ctx.fillStyle = '#fde047'; ctx.font = '24px system-ui';
+  ctx.fillText('O\'lcham: ' + Math.round(state.r), 16, 34);
+  if (list.length < 2) ctx.fillText('O\'lchamni o\'zgartirish uchun ikkinchi qo\'lni ko\'rsating', 16, H - 20);
+}
+
+const st = document.getElementById('st');
+let running = false;
+async function loop() {
+  if (!running) return;
+  try { if (v.readyState >= 2) await hands.send({image: v}); }
+  catch (e) { st.textContent = 'Model xatosi: ' + e.message; return; }
+  requestAnimationFrame(loop);
+}
+
+document.getElementById('go').onclick = async () => {
+  if (!window.Hands) { st.textContent = 'MediaPipe yuklanmadi. Internetni tekshiring va sahifani yangilang.'; return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    st.textContent = 'Bu brauzer kamerani qo\'llamaydi. Chrome yoki Safari\'da oching (HTTPS manzil).'; return;
+  }
+  st.textContent = 'Kamera ochilmoqda...';
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user'}, audio: false});
+    v.srcObject = s;
+    await v.play();
+    st.textContent = 'Model yuklanmoqda (birinchi marta 10-20 soniya)...';
+    running = true;
+    loop();
+  } catch (e) {
+    st.textContent = 'Kamera xatosi: ' + e.name + ' – ' + e.message;
+  }
+};
+</script>
+</body>
+</html>
